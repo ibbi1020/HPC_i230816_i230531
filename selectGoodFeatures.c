@@ -19,6 +19,12 @@
 #include "klt_util.h"
 #include "pyramid.h"
 
+/* CUDA optimization configuration and headers */
+#include "cuda_config.h"
+#ifdef USE_CUDA_FEATURE_SELECTION
+#include "mineigenvalue_cuda.h"
+#endif
+
 int KLT_verbose = 1;
 
 typedef enum {SELECTING_ALL, REPLACING_SOME} selectionMode;
@@ -391,6 +397,44 @@ void _KLTSelectGoodFeatures(
     for (i = 0 ; i < sizeof(int) ; i++)  limit *= 256;
     limit = limit/2 - 1;
 		
+#ifdef USE_CUDA_FEATURE_SELECTION
+    /* CUDA version - compute all eigenvalues at once on GPU */
+    float* eigenvalues = (float*)malloc(ncols * nrows * sizeof(float));
+    
+    /* Call CUDA kernel to compute eigenvalues for all pixels */
+    cudaComputeMinEigenvalues(
+        gradx->data, 
+        grady->data, 
+        eigenvalues,
+        ncols, 
+        nrows, 
+        window_hw
+    );
+    
+    /* Extract valid eigenvalues into pointlist */
+    ptr = pointlist;
+    for (y = bordery ; y < nrows - bordery ; y += tc->nSkippedPixels + 1)
+      for (x = borderx ; x < ncols - borderx ; x += tc->nSkippedPixels + 1)  {
+        val = eigenvalues[y * ncols + x];
+        
+        if (val < 0) continue;  /* Skip invalid pixels */
+        
+        *ptr++ = x;
+        *ptr++ = y;
+        
+        if (val > limit)  {
+          KLTWarning("(_KLTSelectGoodFeatures) minimum eigenvalue %f is "
+                     "greater than the capacity of an int; setting "
+                     "to maximum value", val);
+          val = (float) limit;
+        }
+        *ptr++ = (int) val;
+        npoints++;
+      }
+    
+    free(eigenvalues);
+#else
+    /* CPU version - compute eigenvalues pixel by pixel */
     /* For most of the pixels in the image, do ... */
     ptr = pointlist;
     for (y = bordery ; y < nrows - bordery ; y += tc->nSkippedPixels + 1)
@@ -421,6 +465,7 @@ void _KLTSelectGoodFeatures(
         *ptr++ = (int) val;
         npoints++;
       }
+#endif
   }
 			
   /* Sort the features  */
