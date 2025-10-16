@@ -7,6 +7,7 @@ CC = gcc
 NVCC = nvcc
 CUDA_FLAGS = -O3 -arch=sm_50
 CUDA_LIBS = -lcudart
+CUDA_LIBDIR = -L/usr/local/cuda/lib64
 
 ######################################################################
 # -DNDEBUG prevents the assert() statements from being included in 
@@ -34,34 +35,38 @@ CFLAGS = $(FLAG1) $(FLAG2)
 EXAMPLES = example1.c example2.c example3.c example4.c example5.c
 ARCH = convolve.c error.c pnmio.c pyramid.c selectGoodFeatures.c \
        storeFeatures.c trackFeatures.c klt.c klt_util.c writeFeatures.c
+CUDA_SRCS = interpolate_cuda.cu mineigenvalue_cuda.cu
+CUDA_OBJS = $(CUDA_SRCS:.cu=.o)
 LIB = -L/usr/local/lib -L/usr/lib
 
-.SUFFIXES:  .c .o
+.SUFFIXES:  .c .o .cu
 
 all:  lib $(EXAMPLES:.c=)
 
 .c.o:
 	$(CC) -c $(CFLAGS) $<
 
-lib: $(ARCH:.c=.o)
+.cu.o:
+	$(NVCC) -c $(CUDA_FLAGS) $<
+
+lib: $(ARCH:.c=.o) $(CUDA_OBJS)
 	rm -f libklt.a
-	ar ruv libklt.a $(ARCH:.c=.o)
-	rm -f *.o
+	ar ruv libklt.a $(ARCH:.c=.o) $(CUDA_OBJS)
 
 example1: libklt.a
-	$(CC) -O3 $(CFLAGS) -o $@ $@.c -L. -lklt $(LIB) -lm
+	$(CC) -O3 $(CFLAGS) -o $@ $@.c -L. -lklt $(LIB) $(CUDA_LIBDIR) $(CUDA_LIBS) -lm
 
 example2: libklt.a
-	$(CC) -O3 $(CFLAGS) -o $@ $@.c -L. -lklt $(LIB) -lm
+	$(CC) -O3 $(CFLAGS) -o $@ $@.c -L. -lklt $(LIB) $(CUDA_LIBDIR) $(CUDA_LIBS) -lm
 
 example3: libklt.a
-	$(CC) -O3 $(CFLAGS) -o $@ $@.c -L. -lklt $(LIB) -lm
+	$(CC) -O3 $(CFLAGS) -o $@ $@.c -L. -lklt $(LIB) $(CUDA_LIBDIR) $(CUDA_LIBS) -lm
 
 example4: libklt.a
-	$(CC) -O3 $(CFLAGS) -o $@ $@.c -L. -lklt $(LIB) -lm
+	$(CC) -O3 $(CFLAGS) -o $@ $@.c -L. -lklt $(LIB) $(CUDA_LIBDIR) $(CUDA_LIBS) -lm
 
 example5: libklt.a
-	$(CC) -O3 $(CFLAGS) -o $@ $@.c -L. -lklt $(LIB) -lm
+	$(CC) -O3 $(CFLAGS) -o $@ $@.c -L. -lklt $(LIB) $(CUDA_LIBDIR) $(CUDA_LIBS) -lm
 
 depend:
 	makedepend $(ARCH) $(EXAMPLES)

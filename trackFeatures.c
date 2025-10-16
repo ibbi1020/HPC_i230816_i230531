@@ -16,10 +16,12 @@
 #include "klt.h"
 #include "klt_util.h"	/* _KLT_FloatImage */
 #include "pyramid.h"	/* _KLT_Pyramid */
-#include "interpolate_cuda.h"	/* CUDA interpolation */
 
-/* Enable CUDA acceleration (comment out to use CPU-only version) */
-#define USE_CUDA_INTERPOLATION 1
+/* CUDA optimization configuration and headers */
+#include "cuda_config.h"
+#ifdef USE_CUDA_INTERPOLATION
+#include "interpolate_cuda.h"	/* CUDA interpolation */
+#endif
 
 extern int KLT_verbose;
 
