@@ -16,6 +16,10 @@
 #include "klt.h"
 #include "klt_util.h"	/* _KLT_FloatImage */
 #include "pyramid.h"	/* _KLT_Pyramid */
+#include "interpolate_cuda.h"	/* CUDA interpolation */
+
+/* Enable CUDA acceleration (comment out to use CPU-only version) */
+#define USE_CUDA_INTERPOLATION 1
 
 extern int KLT_verbose;
 
@@ -55,6 +59,133 @@ static float _interpolate(
            (1-ax) *   ay   * *(ptr+(img->ncols)) +
            ax   *   ay   * *(ptr+(img->ncols)+1) );
 }
+
+/*********************************************************************
+ * _computeIntensityDifferenceCUDA
+ *
+ * CUDA-accelerated version of _computeIntensityDifference
+ * Batches all interpolation calls to the GPU for parallel processing.
+ */
+
+static void _computeIntensityDifferenceCUDA(
+  _KLT_FloatImage img1,   /* images */
+  _KLT_FloatImage img2,
+  float x1, float y1,     /* center of window in 1st img */
+  float x2, float y2,     /* center of window in 2nd img */
+  int width, int height,  /* size of window */
+  _FloatWindow imgdiff)   /* output */
+{
+  int hw = width/2, hh = height/2;
+  int windowSize = width * height;
+  int numPoints = windowSize * 2; // 2 interpolations per pixel
+  
+  // Allocate arrays for batch processing
+  float *coords = (float*)malloc(numPoints * 2 * sizeof(float));
+  float *results = (float*)malloc(numPoints * sizeof(float));
+  
+  // Prepare coordinate arrays
+  int idx = 0;
+  for (int j = -hh; j <= hh; j++) {
+    for (int i = -hw; i <= hw; i++) {
+      coords[idx * 2] = x1 + i;
+      coords[idx * 2 + 1] = y1 + j;
+      coords[(idx + windowSize) * 2] = x2 + i;
+      coords[(idx + windowSize) * 2 + 1] = y2 + j;
+      idx++;
+    }
+  }
+  
+  // Process img1 points on GPU
+  cudaNaiveInterpolate(img1->data, img1->ncols, img1->nrows, 
+                       coords, results, windowSize);
+  
+  // Process img2 points on GPU
+  cudaNaiveInterpolate(img2->data, img2->ncols, img2->nrows, 
+                       coords + windowSize * 2, results + windowSize, windowSize);
+  
+  // Compute differences
+  for (int i = 0; i < windowSize; i++) {
+    imgdiff[i] = results[i] - results[i + windowSize];
+  }
+  
+  free(coords);
+  free(results);
+}
+
+/*********************************************************************
+ * _computeGradientSumCUDA
+ *
+ * CUDA-accelerated version of _computeGradientSum
+ * Batches all interpolation calls to the GPU for parallel processing.
+ */
+
+static void _computeGradientSumCUDA(
+  _KLT_FloatImage gradx1,  /* gradient images */
+  _KLT_FloatImage grady1,
+  _KLT_FloatImage gradx2,
+  _KLT_FloatImage grady2,
+  float x1, float y1,      /* center of window in 1st img */
+  float x2, float y2,      /* center of window in 2nd img */
+  int width, int height,   /* size of window */
+  _FloatWindow gradx,      /* output */
+  _FloatWindow grady)      /*   " */
+{
+  int hw = width/2, hh = height/2;
+  int windowSize = width * height;
+  int numPoints = windowSize * 4; // 4 gradient interpolations per pixel
+  
+  // Allocate arrays for batch processing
+  float *coords = (float*)malloc(numPoints * 2 * sizeof(float));
+  float *results = (float*)malloc(numPoints * sizeof(float));
+  
+  // Prepare coordinate arrays for all 4 gradient images
+  int idx = 0;
+  for (int j = -hh; j <= hh; j++) {
+    for (int i = -hw; i <= hw; i++) {
+      // gradx1
+      coords[idx * 2] = x1 + i;
+      coords[idx * 2 + 1] = y1 + j;
+      // gradx2
+      coords[(idx + windowSize) * 2] = x2 + i;
+      coords[(idx + windowSize) * 2 + 1] = y2 + j;
+      // grady1
+      coords[(idx + windowSize * 2) * 2] = x1 + i;
+      coords[(idx + windowSize * 2) * 2 + 1] = y1 + j;
+      // grady2
+      coords[(idx + windowSize * 3) * 2] = x2 + i;
+      coords[(idx + windowSize * 3) * 2 + 1] = y2 + j;
+      idx++;
+    }
+  }
+  
+  // Process all gradient images on GPU
+  cudaNaiveInterpolate(gradx1->data, gradx1->ncols, gradx1->nrows, 
+                       coords, results, windowSize);
+  cudaNaiveInterpolate(gradx2->data, gradx2->ncols, gradx2->nrows, 
+                       coords + windowSize * 2, results + windowSize, windowSize);
+  cudaNaiveInterpolate(grady1->data, grady1->ncols, grady1->nrows, 
+                       coords + windowSize * 4, results + windowSize * 2, windowSize);
+  cudaNaiveInterpolate(grady2->data, grady2->ncols, grady2->nrows, 
+                       coords + windowSize * 6, results + windowSize * 3, windowSize);
+  
+  // Compute sums
+  for (int i = 0; i < windowSize; i++) {
+    gradx[i] = results[i] + results[i + windowSize];
+    grady[i] = results[i + windowSize * 2] + results[i + windowSize * 3];
+  }
+  
+  free(coords);
+  free(results);
+}
+
+/* Macro to select between CPU and CUDA implementations */
+#ifdef USE_CUDA_INTERPOLATION
+  #define COMPUTE_INTENSITY_DIFFERENCE _computeIntensityDifferenceCUDA
+  #define COMPUTE_GRADIENT_SUM _computeGradientSumCUDA
+#else
+  #define COMPUTE_INTENSITY_DIFFERENCE _computeIntensityDifference
+  #define COMPUTE_GRADIENT_SUM _computeGradientSum
+#endif
 
 
 /*********************************************************************
@@ -433,9 +564,9 @@ static int _trackFeature(
       _computeGradientSumLightingInsensitive(gradx1, grady1, gradx2, grady2, 
 			  img1, img2, x1, y1, *x2, *y2, width, height, gradx, grady);
     } else {
-      _computeIntensityDifference(img1, img2, x1, y1, *x2, *y2, 
+      COMPUTE_INTENSITY_DIFFERENCE(img1, img2, x1, y1, *x2, *y2, 
                                   width, height, imgdiff);
-      _computeGradientSum(gradx1, grady1, gradx2, grady2, 
+      COMPUTE_GRADIENT_SUM(gradx1, grady1, gradx2, grady2, 
 			  x1, y1, *x2, *y2, width, height, gradx, grady);
     }
 		
@@ -467,7 +598,7 @@ static int _trackFeature(
       _computeIntensityDifferenceLightingInsensitive(img1, img2, x1, y1, *x2, *y2, 
                                   width, height, imgdiff);
     else
-      _computeIntensityDifference(img1, img2, x1, y1, *x2, *y2, 
+      COMPUTE_INTENSITY_DIFFERENCE(img1, img2, x1, y1, *x2, *y2, 
                                   width, height, imgdiff);
     if (_sumAbsFloatWindow(imgdiff, width, height)/(width*height) > max_residue) 
       status = KLT_LARGE_RESIDUE;
@@ -1027,9 +1158,9 @@ static int _am_trackFeatureAffine(
         _computeGradientSumLightingInsensitive(gradx1, grady1, gradx2, grady2, 
 			    img1, img2, x1, y1, *x2, *y2, width, height, gradx, grady);
       } else {
-        _computeIntensityDifference(img1, img2, x1, y1, *x2, *y2, 
+        COMPUTE_INTENSITY_DIFFERENCE(img1, img2, x1, y1, *x2, *y2, 
                                     width, height, imgdiff);
-        _computeGradientSum(gradx1, grady1, gradx2, grady2, 
+        COMPUTE_GRADIENT_SUM(gradx1, grady1, gradx2, grady2, 
 			    x1, y1, *x2, *y2, width, height, gradx, grady);
       }
       
@@ -1194,7 +1325,7 @@ static int _am_trackFeatureAffine(
   /* Check whether residue is too large */
   if (status == KLT_TRACKED)  {
     if(!affine_map){
-      _computeIntensityDifference(img1, img2, x1, y1, *x2, *y2, 
+      COMPUTE_INTENSITY_DIFFERENCE(img1, img2, x1, y1, *x2, *y2, 
 				  width, height, imgdiff);
     }else{
       _am_computeIntensityDifferenceAffine(img1, img2, x1, y1, *x2, *y2,  *Axx, *Ayx , *Axy, *Ayy,

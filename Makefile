@@ -3,6 +3,12 @@
 CC = gcc
 
 ######################################################################
+# CUDA compiler and flags
+NVCC = nvcc
+CUDA_FLAGS = -O3 -arch=sm_50
+CUDA_LIBS = -lcudart
+
+######################################################################
 # -DNDEBUG prevents the assert() statements from being included in 
 # the code.  If you are having problems running the code, you might 
 # want to comment this line to see if an assert() statement fires.
