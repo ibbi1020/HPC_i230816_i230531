@@ -1,6 +1,7 @@
 ######################################################################
-# Choose your favorite C compiler
+# Choose your compilers
 CC = gcc
+NVCC = nvcc
 ######################################################################
 # -DNDEBUG prevents the assert() statements from being included in 
 # the code.  If you are having problems running the code, you might 
@@ -15,49 +16,75 @@ FLAG1 = -DNDEBUG
 # FLAG2 = -DKLT_USE_QSORT
 ######################################################################
 # Add your favorite C flags here.
-CFLAGS = $(FLAG1) $(FLAG2)
+# Add CUDA include path so convolve.c can find cuda_runtime.h
+CFLAGS = $(FLAG1) $(FLAG2) -I/usr/local/cuda/include
+######################################################################
+# CUDA flags
+# GTX 960 is Maxwell architecture with compute capability 5.2
+NVCCFLAGS = $(FLAG1) $(FLAG2) \
+            -gencode arch=compute_50,code=sm_50 \
+            -gencode arch=compute_50,code=compute_50 \
+            -Xcompiler -fPIC \
+            -rdc=true
 ######################################################################
 # Library flags
-LIB = -L/usr/local/lib -L/usr/lib -L.
-LIBS = -lm
+LIB = -L/usr/local/lib -L/usr/lib -L. -L/usr/local/cuda/lib64
+LIBS = -lm -lcudart
 ######################################################################
 # Source and object files
 EXAMPLES = example1.c example2.c example3.c example4.c example5.c
-ARCH = convolve.c error.c pnmio.c pyramid.c selectGoodFeatures.c \
-       storeFeatures.c trackFeatures.c klt.c klt_util.c writeFeatures.c
+
+# C source files (convolve.c stays as .c)
+C_ARCH = convolve.c error.c pnmio.c pyramid.c selectGoodFeatures.c \
+         storeFeatures.c trackFeatures.c klt.c klt_util.c writeFeatures.c
+
+# CUDA source files (new separate GPU file)
+CUDA_ARCH = convolve_gpu.cu
+
+# All architecture files
+ARCH = $(C_ARCH) $(CUDA_ARCH)
+
+# Object files
+C_OBJS = $(C_ARCH:.c=.o)
+CUDA_OBJS = $(CUDA_ARCH:.cu=.o)
+ALL_OBJS = $(C_OBJS) $(CUDA_OBJS)
 
 ######################################################################
 # Targets
-.SUFFIXES:  .c .o
 
 all: lib $(EXAMPLES:.c=)
 
-.c.o:
-	$(CC) -c $(CFLAGS) $<
+%.o: %.c
+	$(CC) -c $(CFLAGS) $< -o $@
 
-lib: $(ARCH:.c=.o)
+%.o: %.cu
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@
+
+lib: $(ALL_OBJS)
 	rm -f libklt.a
-	ar ruv libklt.a $(ARCH:.c=.o)
-	rm -f *.o
+	$(NVCC) $(NVCCFLAGS) -dlink convolve_gpu.o -o device_link.o
+	ar ruv libklt.a $(ALL_OBJS) device_link.o
+	ranlib libklt.a
 
 example1: libklt.a
-	$(CC) -O3 $(CFLAGS) -o $@ $@.c $(LIB) -lklt $(LIBS) $(LDFLAGS)
+	$(NVCC) -O3 $(NVCCFLAGS) -o $@ $@.c convolve_gpu.cu $(LIB) -lklt -lm -lcudart $(LDFLAGS)
 
 example2: libklt.a
-	$(CC) -O3 $(CFLAGS) -o $@ $@.c $(LIB) -lklt $(LIBS) $(LDFLAGS)
+	$(NVCC) -O3 $(NVCCFLAGS) -o $@ $@.c convolve_gpu.cu $(LIB) -lklt -lm -lcudart $(LDFLAGS)
 
 example3: libklt.a
-	$(CC) -O3 $(CFLAGS) -o $@ $@.c $(LIB) -lklt $(LIBS) $(LDFLAGS)
+	$(NVCC) -O3 $(NVCCFLAGS) -o $@ $@.c convolve_gpu.cu $(LIB) -lklt -lm -lcudart $(LDFLAGS)
 
 example4: libklt.a
-	$(CC) -O3 $(CFLAGS) -o $@ $@.c $(LIB) -lklt $(LIBS) $(LDFLAGS)
+	$(NVCC) -O3 $(NVCCFLAGS) -o $@ $@.c convolve_gpu.cu $(LIB) -lklt -lm -lcudart $(LDFLAGS)
 
 example5: libklt.a
-	$(CC) -O3 $(CFLAGS) -o $@ $@.c $(LIB) -lklt $(LIBS) $(LDFLAGS)
+	$(NVCC) -O3 $(NVCCFLAGS) -o $@ $@.c convolve_gpu.cu $(LIB) -lklt -lm -lcudart $(LDFLAGS)
 
 ######################################################################
 # Gprof profiling targets
 gprof: CFLAGS=-O1 -g -pg -fno-inline -fno-omit-frame-pointer -Wall -Wfatal-errors $(FLAG1) $(FLAG2)
+gprof: NVCCFLAGS=$(FLAG1) $(FLAG2) -gencode arch=compute_52,code=sm_52 -gencode arch=compute_52,code=compute_52 -Xcompiler "-O1 -g -pg -fno-inline -fno-omit-frame-pointer -Wall -Wfatal-errors"
 gprof: LDFLAGS=-pg
 gprof: clean lib $(EXAMPLES:.c=)
 	@echo "Gprof-enabled executables built. Run one of the examples to generate gmon.out"
@@ -96,10 +123,10 @@ gprof-example5: gprof
 ######################################################################
 # Utility targets
 depend:
-	makedepend $(ARCH) $(EXAMPLES)
+	makedepend $(C_ARCH) $(EXAMPLES)
 
 clean:
-	rm -f *.o *.a $(EXAMPLES:.c=) *.tar *.tar.gz libklt.a \
+	rm -f *.o *.a $(EXAMPLES:.c=) *.tar *.tar.gz libklt.a device_link.o \
 	      feat*.ppm features.ft features.txt gmon.out profile-*.txt profile-*.pdf
 
 .PHONY: clean depend all lib gprof gprof-example1 gprof-example2 gprof-example3 gprof-example4 gprof-example5
