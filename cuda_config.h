@@ -16,10 +16,10 @@
  *********************************************************************/
 
 /* Enable CUDA acceleration for bilinear interpolation (trackFeatures.c) */
-#define USE_CUDA_INTERPOLATION
+#define USE_CUDA_INTERPOLATION 1
 
 /* Enable CUDA acceleration for feature selection (selectGoodFeatures.c) */
-#define USE_CUDA_FEATURE_SELECTION
+#define USE_CUDA_FEATURE_SELECTION 1
 
 /* Enable CUDA acceleration for convolution (future optimization) */
 /* #define USE_CUDA_CONVOLUTION */
