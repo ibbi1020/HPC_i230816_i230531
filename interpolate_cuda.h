@@ -1,6 +1,10 @@
 #ifndef INTERPOLATE_CUDA_H
 #define INTERPOLATE_CUDA_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*********************************************************************
  * cudaNaiveInterpolate
  * 
@@ -44,5 +48,9 @@ void cudaNaiveInterpolatePersistent(
     const float* coords,
     float* results,
     int numPoints);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* INTERPOLATE_CUDA_H */

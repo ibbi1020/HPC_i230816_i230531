@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include "interpolate_cuda.h"
 
+// Kernel stays in C++ namespace (kernels are always C++)
 /*********************************************************************
  * naiveInterpolateKernel
  * 
@@ -67,6 +68,9 @@ __global__ void naiveInterpolateKernel(
                    (1 - ax) * ay * p01 +
                    ax * ay * p11;
 }
+
+// C linkage for functions called from C code
+extern "C" {
 
 /*********************************************************************
  * cudaNaiveInterpolate
@@ -153,4 +157,6 @@ void cudaNaiveInterpolatePersistent(const float* d_img, int width, int height, c
     
     cudaFree(d_coords);
     cudaFree(d_results);
+}
+
 }

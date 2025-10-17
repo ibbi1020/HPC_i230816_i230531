@@ -80,6 +80,9 @@ __global__ void minEigenvalueKernel(
     eigenvalues[y * ncols + x] = min_eigenval;
 }
 
+// C linkage for functions called from C code
+extern "C" {
+
 /*********************************************************************
  * cudaComputeMinEigenvalues
  * 
@@ -170,3 +173,5 @@ void cudaComputeMinEigenvaluesWithGradients(const float* d_gradx, const float* d
     
     cudaFree(d_eigenvalues);
 }
+
+} 
