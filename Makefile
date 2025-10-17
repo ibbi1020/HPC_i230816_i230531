@@ -1,7 +1,7 @@
 ######################################################################
-# Choose your favorite C compiler
+# Choose your compilers
 CC = gcc
-
+NVCC = nvcc
 ######################################################################
 # CUDA compiler and flags
 # Updated for Google Colab GPUs (Tesla T4: sm_75, V100: sm_70, A100: sm_80)
@@ -19,7 +19,6 @@ CUDA_PROFILE_FLAGS = -lineinfo -Xcompiler -rdynamic
 # the code.  If you are having problems running the code, you might 
 # want to comment this line to see if an assert() statement fires.
 FLAG1 = -DNDEBUG
-
 ######################################################################
 # -DKLT_USE_QSORT forces the code to use the standard qsort() 
 # routine.  Otherwise it will use a quicksort routine that takes
@@ -27,28 +26,49 @@ FLAG1 = -DNDEBUG
 # running time on some machines.  Uncomment this line if for some
 # reason you are unhappy with the special routine.
 # FLAG2 = -DKLT_USE_QSORT
-
 ######################################################################
 # Add your favorite C flags here.
-CFLAGS = $(FLAG1) $(FLAG2)
-
-
+# Add CUDA include path so convolve.c can find cuda_runtime.h
+CFLAGS = $(FLAG1) $(FLAG2) -I/usr/local/cuda/include
 ######################################################################
-## KLT compilation
+# CUDA flags
+# GTX 960 is Maxwell architecture with compute capability 5.2
+NVCCFLAGS = $(FLAG1) $(FLAG2) \
+            -gencode arch=compute_50,code=sm_50 \
+            -gencode arch=compute_50,code=compute_50 \
+            -Xcompiler -fPIC \
+            -rdc=true
+######################################################################
+# Library flags
+LIB = -L/usr/local/lib -L/usr/lib -L. -L/usr/local/cuda/lib64
+LIBS = -lm -lcudart
+######################################################################
+# Source and object files
+EXAMPLES = example1.c example2.c example3.c example4.c example5.c
+
+# C source files (convolve.c stays as .c)
+C_ARCH = convolve.c error.c pnmio.c pyramid.c selectGoodFeatures.c \
+         storeFeatures.c trackFeatures.c klt.c klt_util.c writeFeatures.c
+
+# CUDA source files (new separate GPU file)
+CUDA_ARCH = convolve_gpu.cu
 
 EXAMPLES = example1.c example2.c example3.c example4.c example5.c
 ARCH = convolve.c error.c pnmio.c pyramid.c selectGoodFeatures.c \
        storeFeatures.c trackFeatures.c klt.c klt_util.c writeFeatures.c
-CUDA_SRCS = interpolate_cuda.cu mineigenvalue_cuda.cu
+CUDA_SRCS = interpolate_cuda.cu mineigenvalue_cuda.cu convolve_gpu.cu
 CUDA_OBJS = $(CUDA_SRCS:.cu=.o)
 LIB = -L/usr/local/lib -L/usr/lib
 
 .SUFFIXES:  .c .o .cu
 
-all:  lib $(EXAMPLES:.c=)
+######################################################################
+# Targets
 
-.c.o:
-	$(CC) -c $(CFLAGS) $<
+all: lib $(EXAMPLES:.c=)
+
+%.o: %.c
+	$(CC) -c $(CFLAGS) $< -o $@
 
 .cu.o:
 	$(NVCC) -c $(CUDA_FLAGS) $<
@@ -59,6 +79,9 @@ interpolate_cuda.o: interpolate_cuda.cu interpolate_cuda.h cuda_config.h
 
 mineigenvalue_cuda.o: mineigenvalue_cuda.cu mineigenvalue_cuda.h cuda_config.h
 	$(NVCC) -c $(CUDA_FLAGS) mineigenvalue_cuda.cu
+
+convolve_gpu.o: convolve_gpu.cu convolve_gpu.h cuda_config.h
+	$(NVCC) -c $(CUDA_FLAGS) convolve_gpu.cu
 
 # Explicit library target so rules depending on 'libklt.a' can build it
 libklt.a: $(ARCH:.c=.o) $(CUDA_OBJS)
@@ -83,8 +106,10 @@ example4: libklt.a
 example5: libklt.a
 	$(CC) -O3 $(CFLAGS) -o $@ $@.c -L. -lklt $(LIB) $(CUDA_LIBDIR) $(CUDA_LIBS) -lm
 
+######################################################################
+# Utility targets
 depend:
-	makedepend $(ARCH) $(EXAMPLES)
+	makedepend $(C_ARCH) $(EXAMPLES)
 
 clean:
 	rm -f *.o *.a $(EXAMPLES:.c=) *.tar *.tar.gz libklt.a \
@@ -262,12 +287,6 @@ cuda-profile-example3: example3
 	@echo ""
 	@echo "1. Running nvprof (GPU + API trace)..."
 	@nvprof --print-summary --print-api-trace --print-summary --log-file profile-example3-nvprof.txt ./example3 2>&1 || echo "nvprof failed, trying simple mode..." && nvprof --print-gpu-trace --log-file profile-example3-nvprof.txt ./example3 2>&1
-	@if [ -f profile-example3-nvprof.txt ]; then \
-		echo "Generating PDF visualization..."; \
-		bash nvprof2pdf.sh profile-example3-nvprof.txt profile-example3-nvprof.pdf && \
-		echo "✓ Generated: profile-example3-nvprof.pdf" || \
-		echo "⚠ PDF generation failed (matplotlib required: pip install matplotlib)"; \
-	fi
 	@echo ""
 	@echo "2. Running nsys (if available)..."
 	@nsys profile --stats=true --force-overwrite=true --output=profile-example3-nsys ./example3 > profile-example3-nsys-summary.txt 2>&1 || echo "nsys not available (optional)"
@@ -285,6 +304,3 @@ cuda-profile-example3: example3
 cuda-profile-all: cuda-profile-example3
 	@echo "All CUDA profiles generated!"
 
-# Clean profiling files
-clean-profiles:
-	rm -f profile-*.txt profile-*.dot profile-*.pdf profile-*.nsys-rep profile-*.ncu-rep *.qdrep *.sqlite
