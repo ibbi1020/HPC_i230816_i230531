@@ -304,3 +304,4 @@ cuda-profile-example3: example3
 cuda-profile-all: cuda-profile-example3
 	@echo "All CUDA profiles generated!"
 
+.PHONY: clean depend all lib gprof gprof-example1 gprof-example2 gprof-example3 gprof-example4 gprof-example5

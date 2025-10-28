@@ -10,7 +10,8 @@
 #include "base.h"
 #include "error.h"
 #include "convolve.h"
-#include "klt_util.h" 
+#include "klt_util.h" /* printing */
+//#include <device_launch_parameters.h>
 
 #ifdef USE_CUDA_CONVOLUTION
 #include "convolve_gpu.h"
@@ -332,14 +333,64 @@ static void _convolveSeparate(
   ConvolutionKernel vert_kernel,
   _KLT_FloatImage imgout)
 {
-  _KLT_FloatImage tmpimg;
-  tmpimg = _KLTCreateFloatImage(imgin->ncols, imgin->nrows);
-  _convolveImageHoriz(imgin, horiz_kernel, tmpimg);
-  _convolveImageVert(tmpimg, vert_kernel, imgout);
-  _KLTFreeFloatImage(tmpimg);
+  int ncols = imgin->ncols;
+  int nrows = imgin->nrows;
+  int img_size = ncols * nrows * sizeof(float);
+  
+  // Allocate device memory
+  float *d_imgin, *d_tmpimg, *d_imgout;
+  float *d_horiz_kernel, *d_vert_kernel;
+  
+  cudaMalloc((void**)&d_imgin, img_size);
+  cudaMalloc((void**)&d_tmpimg, img_size);
+  cudaMalloc((void**)&d_imgout, img_size);
+  cudaMalloc((void**)&d_horiz_kernel, horiz_kernel.width * sizeof(float));
+  cudaMalloc((void**)&d_vert_kernel, vert_kernel.width * sizeof(float));
+  
+  // Copy data to device
+  cudaMemcpy(d_imgin, imgin->data, img_size, cudaMemcpyHostToDevice);
+  cudaMemcpy(d_horiz_kernel, horiz_kernel.data, 
+             horiz_kernel.width * sizeof(float), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_vert_kernel, vert_kernel.data, 
+             vert_kernel.width * sizeof(float), cudaMemcpyHostToDevice);
+  
+  // Configure kernel launch parameters
+  int blockDimX = 16;
+  int blockDimY = 16;
+  int gridDimX = (ncols + blockDimX - 1) / blockDimX;
+  int gridDimY = (nrows + blockDimY - 1) / blockDimY;
+  
+  // Launch horizontal convolution
+  launchConvolveHorizKernel(d_imgin, d_horiz_kernel, d_tmpimg, 
+                            ncols, nrows, horiz_kernel.width, 
+                            gridDimX, gridDimY, blockDimX, blockDimY);
+  cudaError_t err = cudaGetLastError();
+  if (err != cudaSuccess) {
+      printf("Horizontal convolution kernel launch failed: %d\n", cudaGetErrorString(err));
+  }
+  cudaDeviceSynchronize();
+  
+  // Launch vertical convolution
+  launchConvolveVertKernel(d_tmpimg, d_vert_kernel, d_imgout, 
+                           ncols, nrows, vert_kernel.width,
+                           gridDimX, gridDimY, blockDimX, blockDimY);
+  err = cudaGetLastError();
+  if (err != cudaSuccess) {
+      printf("Vertical convolution kernel launch failed: %d\n", cudaGetErrorString(err));
+  }
+  cudaDeviceSynchronize();
+  
+  // Copy result back to host
+  cudaMemcpy(imgout->data, d_imgout, img_size, cudaMemcpyDeviceToHost);
+  
+  // Free device memory
+  cudaFree(d_imgin);
+  cudaFree(d_tmpimg);
+  cudaFree(d_imgout);
+  cudaFree(d_horiz_kernel);
+  cudaFree(d_vert_kernel);
 }
 #endif
-
 /*********************************************************************
  * _KLTComputeGradients
  */
