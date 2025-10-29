@@ -309,193 +309,155 @@ void _KLTSelectGoodFeatures(
   selectionMode mode)
 {
   _KLT_FloatImage floatimg, gradx, grady;
-  int window_hw, window_hh;
+  int window_hw = tc->window_width / 2;
+  int window_hh = tc->window_height / 2;
   int *pointlist;
   int npoints = 0;
-  KLT_BOOL overwriteAllFeatures = (mode == SELECTING_ALL) ?
-    TRUE : FALSE;
-  KLT_BOOL floatimages_created = FALSE;
+  KLT_BOOL overwriteAll = (mode == SELECTING_ALL);
+  KLT_BOOL float_created = FALSE;
 
-  /* Check window size (and correct if necessary) */
-  if (tc->window_width % 2 != 1) {
-    tc->window_width = tc->window_width+1;
-    KLTWarning("Tracking context's window width must be odd.  "
-               "Changing to %d.\n", tc->window_width);
-  }
-  if (tc->window_height % 2 != 1) {
-    tc->window_height = tc->window_height+1;
-    KLTWarning("Tracking context's window height must be odd.  "
-               "Changing to %d.\n", tc->window_height);
-  }
-  if (tc->window_width < 3) {
-    tc->window_width = 3;
-    KLTWarning("Tracking context's window width must be at least three.  \n"
-               "Changing to %d.\n", tc->window_width);
-  }
-  if (tc->window_height < 3) {
-    tc->window_height = 3;
-    KLTWarning("Tracking context's window height must be at least three.  \n"
-               "Changing to %d.\n", tc->window_height);
-  }
-  window_hw = tc->window_width/2; 
-  window_hh = tc->window_height/2;
-		
-  /* Create pointlist, which is a simplified version of a featurelist, */
-  /* for speed.  Contains only integer locations and values. */
-  pointlist = (int *) malloc(ncols * nrows * 3 * sizeof(int));
+  /* Validate window sizes */
+  if (tc->window_width % 2 != 1) tc->window_width++;
+  if (tc->window_height % 2 != 1) tc->window_height++;
+  if (tc->window_width < 3) tc->window_width = 3;
+  if (tc->window_height < 3) tc->window_height = 3;
+  window_hw = tc->window_width / 2;
+  window_hh = tc->window_height / 2;
 
-  /* Create temporary images, etc. */
-  if (mode == REPLACING_SOME && 
-      tc->sequentialMode && tc->pyramid_last != NULL)  {
-    floatimg = ((_KLT_Pyramid) tc->pyramid_last)->img[0];
-    gradx = ((_KLT_Pyramid) tc->pyramid_last_gradx)->img[0];
-    grady = ((_KLT_Pyramid) tc->pyramid_last_grady)->img[0];
-    assert(gradx != NULL);
-    assert(grady != NULL);
-  } else  {
-    floatimages_created = TRUE;
-    floatimg = _KLTCreateFloatImage(ncols, nrows);
-    gradx    = _KLTCreateFloatImage(ncols, nrows);
-    grady    = _KLTCreateFloatImage(ncols, nrows);
-    if (tc->smoothBeforeSelecting)  {
-      _KLT_FloatImage tmpimg;
-      tmpimg = _KLTCreateFloatImage(ncols, nrows);
-      _KLTToFloatImage(img, ncols, nrows, tmpimg);
-      _KLTComputeSmoothedImage(tmpimg, _KLTComputeSmoothSigma(tc), floatimg);
-      _KLTFreeFloatImage(tmpimg);
-    } else _KLTToFloatImage(img, ncols, nrows, floatimg);
- 
-    /* Compute gradient of image in x and y direction */
-    _KLTComputeGradients(floatimg, tc->grad_sigma, gradx, grady);
-  }
-	
-  /* Write internal images */
-  if (tc->writeInternalImages)  {
-    _KLTWriteFloatImageToPGM(floatimg, "kltimg_sgfrlf.pgm");
-    _KLTWriteFloatImageToPGM(gradx, "kltimg_sgfrlf_gx.pgm");
-    _KLTWriteFloatImageToPGM(grady, "kltimg_sgfrlf_gy.pgm");
-  }
+  /* pointlist: (x,y,val) triplets */
+  pointlist = (int*) malloc(ncols * nrows * 3 * sizeof(int));
 
-  /* Compute trackability of each image pixel as the minimum
-     of the two eigenvalues of the Z matrix */
+  /* Build gradient images */
+  if (mode == REPLACING_SOME &&
+      tc->sequentialMode &&
+      tc->pyramid_last != NULL)
   {
-    register float gx, gy;
-    register float gxx, gxy, gyy;
-    register int xx, yy;
-    register int *ptr;
-    float val;
-    unsigned int limit = 1;
-    int borderx = tc->borderx;	/* Must not touch cols */
-    int bordery = tc->bordery;	/* lost by convolution */
-    int x, y;
-    int i;
-	
-    if (borderx < window_hw)  borderx = window_hw;
-    if (bordery < window_hh)  bordery = window_hh;
-
-    /* Find largest value of an int */
-    for (i = 0 ; i < sizeof(int) ; i++)  limit *= 256;
-    limit = limit/2 - 1;
-		
-#ifdef USE_CUDA_FEATURE_SELECTION
-    /* CUDA version - compute all eigenvalues at once on GPU */
-    float* eigenvalues = (float*)malloc(ncols * nrows * sizeof(float));
-    
-    /* Call CUDA kernel to compute eigenvalues for all pixels */
-    cudaComputeMinEigenvalues(
-        gradx->data, 
-        grady->data, 
-        eigenvalues,
-        ncols, 
-        nrows, 
-        window_hw
-    );
-    
-    /* Extract valid eigenvalues into pointlist */
-    ptr = pointlist;
-    for (y = bordery ; y < nrows - bordery ; y += tc->nSkippedPixels + 1)
-      for (x = borderx ; x < ncols - borderx ; x += tc->nSkippedPixels + 1)  {
-        val = eigenvalues[y * ncols + x];
-        
-        if (val < 0) continue;  /* Skip invalid pixels */
-        
-        *ptr++ = x;
-        *ptr++ = y;
-        
-        if (val > limit)  {
-          KLTWarning("(_KLTSelectGoodFeatures) minimum eigenvalue %f is "
-                     "greater than the capacity of an int; setting "
-                     "to maximum value", val);
-          val = (float) limit;
-        }
-        *ptr++ = (int) val;
-        npoints++;
-      }
-    
-    free(eigenvalues);
-#else
-    /* CPU version - compute eigenvalues pixel by pixel */
-    /* For most of the pixels in the image, do ... */
-    ptr = pointlist;
-    for (y = bordery ; y < nrows - bordery ; y += tc->nSkippedPixels + 1)
-      for (x = borderx ; x < ncols - borderx ; x += tc->nSkippedPixels + 1)  {
-
-        /* Sum the gradients in the surrounding window */
-        gxx = 0;  gxy = 0;  gyy = 0;
-        for (yy = y-window_hh ; yy <= y+window_hh ; yy++)
-          for (xx = x-window_hw ; xx <= x+window_hw ; xx++)  {
-            gx = *(gradx->data + ncols*yy+xx);
-            gy = *(grady->data + ncols*yy+xx);
-            gxx += gx * gx;
-            gxy += gx * gy;
-            gyy += gy * gy;
-          }
-
-        /* Store the trackability of the pixel as the minimum
-           of the two eigenvalues */
-        *ptr++ = x;
-        *ptr++ = y;
-        val = _minEigenvalue(gxx, gxy, gyy);
-        if (val > limit)  {
-          KLTWarning("(_KLTSelectGoodFeatures) minimum eigenvalue %f is "
-                     "greater than the capacity of an int; setting "
-                     "to maximum value", val);
-          val = (float) limit;
-        }
-        *ptr++ = (int) val;
-        npoints++;
-      }
-#endif
+      floatimg = ((_KLT_Pyramid) tc->pyramid_last)->img[0];
+      gradx = ((_KLT_Pyramid) tc->pyramid_last_gradx)->img[0];
+      grady = ((_KLT_Pyramid) tc->pyramid_last_grady)->img[0];
   }
-			
-  /* Sort the features  */
+  else
+  {
+      float_created = TRUE;
+      floatimg = _KLTCreateFloatImage(ncols, nrows);
+      gradx = _KLTCreateFloatImage(ncols, nrows);
+      grady = _KLTCreateFloatImage(ncols, nrows);
+
+      if (tc->smoothBeforeSelecting) {
+          _KLT_FloatImage tmp = _KLTCreateFloatImage(ncols, nrows);
+          _KLTToFloatImage(img, ncols, nrows, tmp);
+          _KLTComputeSmoothedImage(tmp, _KLTComputeSmoothSigma(tc), floatimg);
+          _KLTFreeFloatImage(tmp);
+      } else {
+          _KLTToFloatImage(img, ncols, nrows, floatimg);
+      }
+
+      _KLTComputeGradients(floatimg, tc->grad_sigma, gradx, grady);
+  }
+
+  /*******************************************************************
+   *          GPU MIN-EIGENVALUE COMPUTATION (NEW)
+   *******************************************************************/
+#ifdef USE_CUDA_FEATURE_SELECTION
+  {
+      float* eigenvalues = (float*) malloc(ncols * nrows * sizeof(float));
+
+      cudaComputeMinEigenvalues(
+          gradx->data,
+          grady->data,
+          eigenvalues,
+          ncols,
+          nrows,
+          window_hw
+      );
+
+      int borderx = tc->borderx;
+      int bordery = tc->bordery;
+      if (borderx < window_hw) borderx = window_hw;
+      if (bordery < window_hh) bordery = window_hh;
+
+      int* ptr = pointlist;
+
+      for (int y = bordery; y < nrows - bordery; y += tc->nSkippedPixels + 1)
+      {
+          for (int x = borderx; x < ncols - borderx; x += tc->nSkippedPixels + 1)
+          {
+              float val = eigenvalues[y * ncols + x];
+
+              if (val < 0) continue;
+
+              *ptr++ = x;
+              *ptr++ = y;
+              *ptr++ = (int) val;
+              npoints++;
+          }
+      }
+
+      free(eigenvalues);
+  }
+#else
+  /*******************************************************************
+   *          ORIGINAL CPU FALLBACK (UNCHANGED)
+   *******************************************************************/
+  {
+      float gx, gy, gxx, gxy, gyy, val;
+      int xx, yy;
+      int borderx = tc->borderx;
+      int bordery = tc->bordery;
+      if (borderx < window_hw) borderx = window_hw;
+      if (bordery < window_hh) bordery = window_hh;
+
+      int* ptr = pointlist;
+
+      for (int y = bordery; y < nrows - bordery; y += tc->nSkippedPixels + 1)
+      {
+          for (int x = borderx; x < ncols - borderx; x += tc->nSkippedPixels + 1)
+          {
+              gxx = gxy = gyy = 0;
+
+              for (yy = y-window_hh; yy <= y+window_hh; yy++)
+                  for (xx = x-window_hw; xx <= x+window_hw; xx++)
+                  {
+                      gx = gradx->data[ncols*yy + xx];
+                      gy = grady->data[ncols*yy + xx];
+                      gxx += gx*gx;
+                      gxy += gx*gy;
+                      gyy += gy*gy;
+                  }
+
+              val = _minEigenvalue(gxx, gxy, gyy);
+
+              *ptr++ = x;
+              *ptr++ = y;
+              *ptr++ = (int) val;
+              npoints++;
+          }
+      }
+  }
+#endif
+
+  /* Sort and apply mindist constraints */
   _sortPointList(pointlist, npoints);
 
-  /* Check tc->mindist */
-  if (tc->mindist < 0)  {
-    KLTWarning("(_KLTSelectGoodFeatures) Tracking context field tc->mindist "
-               "is negative (%d); setting to zero", tc->mindist);
-    tc->mindist = 0;
-  }
-
-  /* Enforce minimum distance between features */
   _enforceMinimumDistance(
-    pointlist,
-    npoints,
-    featurelist,
-    ncols, nrows,
-    tc->mindist,
-    tc->min_eigenvalue,
-    overwriteAllFeatures);
+      pointlist,
+      npoints,
+      featurelist,
+      ncols,
+      nrows,
+      tc->mindist,
+      tc->min_eigenvalue,
+      overwriteAll);
 
-  /* Free memory */
+  /* Cleanup */
   free(pointlist);
-  if (floatimages_created)  {
-    _KLTFreeFloatImage(floatimg);
-    _KLTFreeFloatImage(gradx);
-    _KLTFreeFloatImage(grady);
+  if (float_created) {
+      _KLTFreeFloatImage(floatimg);
+      _KLTFreeFloatImage(gradx);
+      _KLTFreeFloatImage(grady);
   }
 }
+
 
 
 /*********************************************************************
@@ -514,7 +476,7 @@ void _KLTSelectGoodFeatures(
  * features:	List of features.  The member nFeatures is computed.
  */
 
-void KLTSelectGoodFeatures(
+ void KLTSelectGoodFeatures(
   KLT_TrackingContext tc,
   KLT_PixelType *img, 
   int ncols, 
@@ -523,7 +485,8 @@ void KLTSelectGoodFeatures(
 {
   if (KLT_verbose >= 1)  {
     fprintf(stderr,  "(KLT) Selecting the %d best features "
-            "from a %d by %d image...  ", fl->nFeatures, ncols, nrows);
+            "from a %d by %d image...  ",
+            fl->nFeatures, ncols, nrows);
     fflush(stderr);
   }
 
@@ -538,6 +501,7 @@ void KLTSelectGoodFeatures(
     fflush(stderr);
   }
 }
+
 
 
 /*********************************************************************

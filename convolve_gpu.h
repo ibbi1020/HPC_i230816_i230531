@@ -1,38 +1,52 @@
-#ifndef _CONVOLVE_GPU_H_
-#define _CONVOLVE_GPU_H_
+#ifndef CONVOLVE_GPU_H
+#define CONVOLVE_GPU_H
+
+#include <cuda_runtime.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// GPU kernel declarations (to be called from host code)
-// Note: These are declared but defined in the .cu file
-void launchConvolveHorizKernel(
-    const float *d_imgin,
-    const float *d_kernel_data,
-    float *d_imgout,
-    int ncols,
-    int nrows,
-    int kernel_width,
-    int gridDimX,
-    int gridDimY,
-    int blockDimX,
-    int blockDimY);
+// ============================================================
+// Upload kernel to constant memory (only works if compiled with -DUSE_CONST)
+// If USE_CONST is not used, this function does nothing.
+// K = kernel size = 2*R + 1
+// ============================================================
+void uploadKernelToConst(const float* hKernel, int K);
 
-void launchConvolveVertKernel(
-    const float *d_imgin,
-    const float *d_kernel_data,
-    float *d_imgout,
-    int ncols,
-    int nrows,
-    int kernel_width,
-    int gridDimX,
-    int gridDimY,
-    int blockDimX,
-    int blockDimY);
+
+// ============================================================
+// Horizontal convolution (one pass of separable blur)
+// d_in, d_out are pitched GPU buffers
+// pitch = pitch in ELEMENTS (not bytes)
+// R = radius (kernel size = 2*R+1)
+// stream = use 0 if you don't use CUDA streams
+// ============================================================
+void runHorizontalConvolution(const float* d_in,
+                              float* d_out,
+                              const float* d_kernel,
+                              int width,
+                              int height,
+                              int pitch,        // in elements
+                              int R,
+                              cudaStream_t stream);
+
+
+// ============================================================
+// Vertical convolution (second pass of separable blur)
+// Same parameters as horizontal
+// ============================================================
+void runVerticalConvolution(const float* d_in,
+                            float* d_out,
+                            const float* d_kernel,
+                            int width,
+                            int height,
+                            int pitch,        // in elements
+                            int R,
+                            cudaStream_t stream);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // _CONVOLVE_GPU_H_
+#endif // CONVOLVE_GPU_H

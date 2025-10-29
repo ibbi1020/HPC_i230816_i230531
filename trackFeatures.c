@@ -578,6 +578,26 @@ static int _trackFeature(
                                &gxx, &gxy, &gyy);
     _compute2by1ErrorVector(imgdiff, gradx, grady, width, height, step_factor,
                             &ex, &ey);
+
+    if (iteration == 0) {  // First iteration only
+      static int debug_count = 0;
+      if (debug_count < 1) {  // Debug first feature only
+          printf("\n=== DEBUG: Inside _trackFeature ===\n");
+          printf("Window size: %d x %d\n", width, height);
+          printf("Position: x1=%f, y1=%f, x2=%f, y2=%f\n", x1, y1, *x2, *y2);
+          printf("Gradient matrix: gxx=%f, gxy=%f, gyy=%f\n", gxx, gxy, gyy);
+          printf("Determinant: %f\n", gxx*gyy - gxy*gxy);
+          printf("Min determinant threshold: %f\n", small);
+          
+          // Check gradient window values
+          printf("Sample gradx window values: %f, %f, %f\n",
+                  gradx[0], gradx[width*height/2], gradx[width*height-1]);
+          printf("Sample grady window values: %f, %f, %f\n",
+                  grady[0], grady[width*height/2], grady[width*height-1]);
+                  
+          debug_count++;
+      }
+  }
 				
     /* Using matrices, solve equation for new displacement */
     status = _solveEquation(gxx, gxy, gyy, ex, ey, small, &dx, &dy);
@@ -1440,6 +1460,37 @@ void KLTTrackFeatures(
 			pyramid1_grady->img[i]);
 	}
 
+  if (1) {  // First frame only
+    printf("\n=== DEBUG: Checking gradient computation ===\n");
+    printf("Image size: %d x %d\n", pyramid1->img[0]->ncols, pyramid1->img[0]->nrows);
+    
+    // Check some image values
+    printf("Sample image values: img[100]=%f, img[1000]=%f, img[10000]=%f\n",
+           pyramid1->img[0]->data[100],
+           pyramid1->img[0]->data[1000],
+           pyramid1->img[0]->data[10000]);
+    
+    // Check gradient values
+    printf("Sample gradx values: gradx[100]=%f, gradx[1000]=%f, gradx[10000]=%f\n",
+           pyramid1_gradx->img[0]->data[100],
+           pyramid1_gradx->img[0]->data[1000],
+           pyramid1_gradx->img[0]->data[10000]);
+           
+    printf("Sample grady values: grady[100]=%f, grady[1000]=%f, grady[10000]=%f\n",
+           pyramid1_grady->img[0]->data[100],
+           pyramid1_grady->img[0]->data[1000],
+           pyramid1_grady->img[0]->data[10000]);
+    
+    // Check for all zeros
+    int zero_count_x = 0, zero_count_y = 0;
+    for (int i = 0; i < 1000; i++) {
+        if (pyramid1_gradx->img[0]->data[i] == 0.0f) zero_count_x++;
+        if (pyramid1_grady->img[0]->data[i] == 0.0f) zero_count_y++;
+    }
+    printf("Zero gradients in first 1000 pixels: gradx=%d, grady=%d\n", 
+           zero_count_x, zero_count_y);
+}
+
 	/* Do the same thing with second image */
 	floatimg2 = _KLTCreateFloatImage(ncols, nrows);
 	_KLTToFloatImage(img2, ncols, nrows, tmpimg);
@@ -1507,6 +1558,25 @@ void KLTTrackFeatures(
 					tc->min_displacement,
 					tc->max_residue,
 					tc->lighting_insensitive);
+
+          if (indx == 0) {  // Debug first feature only
+            printf("\n=== DEBUG: Tracking feature %d ===\n", indx);
+            printf("Initial position: x=%f, y=%f\n", xloc, yloc);
+            printf("After tracking: x=%f, y=%f, status=%d\n", xlocout, ylocout, val);
+            
+            // Check what status means
+            const char* status_str[] = {
+                "KLT_TRACKED=0",
+                "KLT_NOT_FOUND=1", 
+                "KLT_SMALL_DET=2",
+                "KLT_MAX_ITERATIONS=3",
+                "KLT_OOB=4",
+                "KLT_LARGE_RESIDUE=5"
+            };
+            if (val >= 0 && val <= 5) {
+                printf("Status: %s\n", status_str[val]);
+            }
+        }
 
 				if (val==KLT_SMALL_DET || val==KLT_OOB)
 					break;

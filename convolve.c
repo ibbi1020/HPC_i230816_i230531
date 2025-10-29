@@ -18,6 +18,12 @@
 
 #define MAX_KERNEL_WIDTH 71
 
+#ifndef CUDA_TRY
+#define CUDA_TRY(x) do { cudaError_t _e=(x); if(_e!=cudaSuccess){ \
+  fprintf(stderr,"CUDA %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(_e)); \
+}} while(0)
+#endif
+
 typedef struct
 {
   int width;
@@ -265,63 +271,83 @@ static void _convolveImageVert(
   ConvolutionKernel vert_kernel,
   _KLT_FloatImage imgout)
 {
-  int ncols = imgin->ncols;
-  int nrows = imgin->nrows;
-  int img_size = ncols * nrows * sizeof(float);
-  
-  // Allocate device memory
-  float *d_imgin, *d_tmpimg, *d_imgout;
-  float *d_horiz_kernel, *d_vert_kernel;
-  
-  cudaMalloc((void**)&d_imgin, img_size);
-  cudaMalloc((void**)&d_tmpimg, img_size);
-  cudaMalloc((void**)&d_imgout, img_size);
-  cudaMalloc((void**)&d_horiz_kernel, horiz_kernel.width * sizeof(float));
-  cudaMalloc((void**)&d_vert_kernel, vert_kernel.width * sizeof(float));
-  
-  // Copy data to device
-  cudaMemcpy(d_imgin, imgin->data, img_size, cudaMemcpyHostToDevice);
-  cudaMemcpy(d_horiz_kernel, horiz_kernel.data, 
-             horiz_kernel.width * sizeof(float), cudaMemcpyHostToDevice);
-  cudaMemcpy(d_vert_kernel, vert_kernel.data, 
-             vert_kernel.width * sizeof(float), cudaMemcpyHostToDevice);
-  
-  // Configure kernel launch parameters
-  int blockDimX = 16;
-  int blockDimY = 16;
-  int gridDimX = (ncols + blockDimX - 1) / blockDimX;
-  int gridDimY = (nrows + blockDimY - 1) / blockDimY;
-  
-  // Launch horizontal convolution
-  launchConvolveHorizKernel(d_imgin, d_horiz_kernel, d_tmpimg, 
-                            ncols, nrows, horiz_kernel.width, 
-                            gridDimX, gridDimY, blockDimX, blockDimY);
-  cudaError_t err = cudaGetLastError();
-  if (err != cudaSuccess) {
-      printf("Horizontal convolution kernel launch failed: %s\n", cudaGetErrorString(err));
-  }
-  cudaDeviceSynchronize();
-  
-  // Launch vertical convolution
-  launchConvolveVertKernel(d_tmpimg, d_vert_kernel, d_imgout, 
-                           ncols, nrows, vert_kernel.width,
-                           gridDimX, gridDimY, blockDimX, blockDimY);
-  err = cudaGetLastError();
-  if (err != cudaSuccess) {
-      printf("Vertical convolution kernel launch failed: %s\n", cudaGetErrorString(err));
-  }
-  cudaDeviceSynchronize();
-  
-  // Copy result back to host
-  cudaMemcpy(imgout->data, d_imgout, img_size, cudaMemcpyDeviceToHost);
-  
-  // Free device memory
-  cudaFree(d_imgin);
-  cudaFree(d_tmpimg);
-  cudaFree(d_imgout);
-  cudaFree(d_horiz_kernel);
-  cudaFree(d_vert_kernel);
+    int w = imgin->ncols;
+    int h = imgin->nrows;
+
+    // ---- ONE PITCHED SLAB FOR ALL THREE BUFFERS ----
+    float *d_base = NULL;
+    size_t pitch_bytes = 0;
+
+    CUDA_TRY(cudaMallocPitch((void**)&d_base, &pitch_bytes,
+                             w * sizeof(float), 3 * h));
+
+    int pitch_elems = (int)(pitch_bytes / sizeof(float));
+
+    // bytes per row = pitch_bytes
+    // bytes per plane = pitch_bytes * h
+
+    char* base = (char*)d_base;
+
+    float* d_in  = (float*)(base + 0 * pitch_bytes * h);
+    float* d_tmp = (float*)(base + 1 * pitch_bytes * h);
+    float* d_out = (float*)(base + 2 * pitch_bytes * h);
+
+
+    // --- COPY INPUT IMAGE INTO THE FIRST PLANE (FIXED) ---
+    // Host data is contiguous, not pitched, so we copy row by row
+    for (int row = 0; row < h; row++) {
+        CUDA_TRY(cudaMemcpy(
+            (char*)d_in + row * pitch_bytes,
+            imgin->data + row * w,
+            w * sizeof(float),
+            cudaMemcpyHostToDevice));
+    }
+
+    // --- KERNEL RADII ---
+    int R_h = horiz_kernel.width / 2;
+    int R_v = vert_kernel.width / 2;
+
+    // --- Upload kernels to constant memory ---
+    uploadKernelToConst(horiz_kernel.data, horiz_kernel.width);
+    uploadKernelToConst(vert_kernel.data,  vert_kernel.width);
+
+    // ============================================================
+    // 1) Horizontal convolution: imgin (*) horiz -> tmp
+    // ============================================================
+    runHorizontalConvolution(
+        d_in,
+        d_tmp,
+        horiz_kernel.data,
+        w, h, pitch_elems, R_h, 0);
+
+    CUDA_TRY(cudaDeviceSynchronize());
+
+    // ============================================================
+    // 2) Vertical convolution: tmp (*) vert -> out
+    // ============================================================
+    runVerticalConvolution(
+        d_tmp,
+        d_out,
+        vert_kernel.data,
+        w, h, pitch_elems, R_v, 0);
+
+    CUDA_TRY(cudaDeviceSynchronize());
+
+    // --- COPY RESULT BACK (FIXED) ---
+    // Host data is contiguous, not pitched, so we copy row by row
+    for (int row = 0; row < h; row++) {
+        CUDA_TRY(cudaMemcpy(
+            imgout->data + row * w,
+            (char*)d_out + row * pitch_bytes,
+            w * sizeof(float),
+            cudaMemcpyDeviceToHost));
+    }
+
+    cudaFree(d_base);
 }
+
+
+
 
 /*********************************************************************
  * _KLTComputeGradients
