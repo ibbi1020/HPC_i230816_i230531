@@ -114,8 +114,11 @@ void cudaComputeMinEigenvalues(const float* gradx, const float* grady, float* ei
     cudaMemcpy(d_gradx, gradx, size, cudaMemcpyHostToDevice);
     cudaMemcpy(d_grady, grady, size, cudaMemcpyHostToDevice);
     
-    // Configure kernel launch parameters
-    // Use 16x16 thread blocks (256 threads per block)
+    // Configure kernel launch parameters with optimized block size
+    // 16x16 (256 threads) provides good balance for 2D image processing
+    // - Sufficient threads for occupancy on most GPUs
+    // - Small enough to fit multiple blocks per SM
+    // - Square blocks work well for eigenvalue computation (isotropic window)
     dim3 blockSize(16, 16);
     dim3 gridSize(
         (ncols + blockSize.x - 1) / blockSize.x,
@@ -158,6 +161,11 @@ void cudaComputeMinEigenvaluesWithGradients(const float* d_gradx, const float* d
     
     cudaMalloc(&d_eigenvalues, size);
     
+    // Configure kernel launch parameters with optimized block size
+    // 16x16 (256 threads) provides good balance for 2D image processing
+    // - Sufficient threads for occupancy on most GPUs
+    // - Small enough to fit multiple blocks per SM
+    // - Square blocks work well for eigenvalue computation (isotropic window)
     dim3 blockSize(16, 16);
     dim3 gridSize(
         (ncols + blockSize.x - 1) / blockSize.x,

@@ -16,6 +16,12 @@
 #include "klt.h"
 #include "pyramid.h"
 
+/* CUDA includes for persistent buffers */
+#include "cuda_config.h"
+#ifdef USE_CUDA_INTERPOLATION
+#include <cuda_runtime.h>
+#endif
+
 
 static const int mindist = 10;
 static const int window_size = 7;
@@ -123,6 +129,76 @@ KLT_TrackingContext KLTCreateTrackingContext()
   tc->affine_max_residue = affine_max_residue;
   tc->affine_min_displacement = affine_min_displacement;
   tc->affine_max_displacement_differ = affine_max_displacement_differ;
+
+  /* Initialize GPU persistent buffers to NULL */
+  tc->d_img_data = NULL;
+  tc->d_gradx_data = NULL;
+  tc->d_grady_data = NULL;
+  tc->d_tmp_buffer = NULL;
+  tc->d_feature_coords = NULL;
+  tc->d_results = NULL;
+  tc->d_buffer_size = 0;
+  tc->d_texObj = NULL;
+
+#ifdef USE_CUDA_INTERPOLATION
+  /* Allocate GPU persistent buffers */
+  /* Use conservative estimates for max image size and features */
+  size_t max_img_size = 2048 * 2048 * sizeof(float);  /* Support up to 2048x2048 images */
+  size_t max_features = 500;  /* Support up to 500 features */
+  
+  cudaError_t err;
+  
+  /* Allocate image and gradient buffers */
+  err = cudaMalloc(&tc->d_img_data, max_img_size);
+  if (err != cudaSuccess) {
+    fprintf(stderr, "Warning: Failed to allocate GPU image buffer: %s\n", 
+            cudaGetErrorString(err));
+    tc->d_img_data = NULL;
+  }
+  
+  err = cudaMalloc(&tc->d_gradx_data, max_img_size);
+  if (err != cudaSuccess) {
+    fprintf(stderr, "Warning: Failed to allocate GPU gradx buffer: %s\n",
+            cudaGetErrorString(err));
+    tc->d_gradx_data = NULL;
+  }
+  
+  err = cudaMalloc(&tc->d_grady_data, max_img_size);
+  if (err != cudaSuccess) {
+    fprintf(stderr, "Warning: Failed to allocate GPU grady buffer: %s\n",
+            cudaGetErrorString(err));
+    tc->d_grady_data = NULL;
+  }
+  
+  err = cudaMalloc(&tc->d_tmp_buffer, max_img_size);
+  if (err != cudaSuccess) {
+    fprintf(stderr, "Warning: Failed to allocate GPU tmp buffer: %s\n",
+            cudaGetErrorString(err));
+    tc->d_tmp_buffer = NULL;
+  }
+  
+  /* Allocate feature data buffers */
+  err = cudaMalloc(&tc->d_feature_coords, max_features * 2 * sizeof(float));
+  if (err != cudaSuccess) {
+    fprintf(stderr, "Warning: Failed to allocate GPU feature coords: %s\n",
+            cudaGetErrorString(err));
+    tc->d_feature_coords = NULL;
+  }
+  
+  err = cudaMalloc(&tc->d_results, max_features * sizeof(float));
+  if (err != cudaSuccess) {
+    fprintf(stderr, "Warning: Failed to allocate GPU results buffer: %s\n",
+            cudaGetErrorString(err));
+    tc->d_results = NULL;
+  }
+  
+  tc->d_buffer_size = max_img_size;
+  
+  if (KLT_verbose >= 1) {
+    fprintf(stderr, "(KLTCreateTrackingContext) Allocated %.2f MB of GPU memory\n",
+            (max_img_size * 4 + max_features * 3 * sizeof(float)) / (1024.0f * 1024.0f));
+  }
+#endif
 
   /* Change nPyramidLevels and subsampling */
   KLTChangeTCPyramid(tc, search_range);
@@ -447,6 +523,21 @@ void KLTFreeTrackingContext(
     _KLTFreePyramid((_KLT_Pyramid) tc->pyramid_last_gradx);
   if (tc->pyramid_last_grady)  
     _KLTFreePyramid((_KLT_Pyramid) tc->pyramid_last_grady);
+  
+#ifdef USE_CUDA_INTERPOLATION
+  /* Free GPU persistent buffers */
+  if (tc->d_img_data) cudaFree(tc->d_img_data);
+  if (tc->d_gradx_data) cudaFree(tc->d_gradx_data);
+  if (tc->d_grady_data) cudaFree(tc->d_grady_data);
+  if (tc->d_tmp_buffer) cudaFree(tc->d_tmp_buffer);
+  if (tc->d_feature_coords) cudaFree(tc->d_feature_coords);
+  if (tc->d_results) cudaFree(tc->d_results);
+  
+  if (KLT_verbose >= 1) {
+    fprintf(stderr, "(KLTFreeTrackingContext) Freed GPU persistent buffers\n");
+  }
+#endif
+  
   free(tc);
 }
 

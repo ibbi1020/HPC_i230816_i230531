@@ -38,7 +38,7 @@ int main()
     KLT_TrackingContext tc;
     KLT_FeatureList fl;
     KLT_FeatureTable ft;
-    int nFeatures = 300;   /* more features since images are larger */
+    int nFeatures = 100;   /* more features since images are larger */
     int nFrames = 0;
     int ncols, nrows, rcols, rrows;
     int scale = 2;         /* resize factor */
@@ -62,7 +62,7 @@ int main()
     /* Select good features on first image */
     KLTSelectGoodFeatures(tc, resized1, rcols, rrows, fl);
     KLTStoreFeatureList(fl, ft, 0);
-    KLTWriteFeatureListToPPM(fl, resized1, rcols, rrows, "feat0.ppm");
+    //KLTWriteFeatureListToPPM(fl, resized1, rcols, rrows, "feat0.ppm");
     nFrames = 1;
 
     /* Process subsequent images until file not found */
@@ -82,7 +82,7 @@ int main()
         KLTStoreFeatureList(fl, ft, i);
 
         sprintf(fnameout, "feat%d.ppm", i);
-        KLTWriteFeatureListToPPM(fl, resized2, rcols, rrows, fnameout);
+        //KLTWriteFeatureListToPPM(fl, resized2, rcols, rrows, fnameout);
 
         free(resized1);
         free(img1);
@@ -92,8 +92,8 @@ int main()
     }
 
     /* Write out feature table */
-    KLTWriteFeatureTable(ft, "features.txt", "%5.1f");
-    KLTWriteFeatureTable(ft, "features.ft", NULL);
+    //KLTWriteFeatureTable(ft, "features.txt", "%5.1f");
+    //KLTWriteFeatureTable(ft, "features.ft", NULL);
 
     KLTFreeFeatureTable(ft);
     KLTFreeFeatureList(fl);

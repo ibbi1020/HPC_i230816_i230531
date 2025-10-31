@@ -97,13 +97,25 @@ static void _computeIntensityDifferenceCUDA(
     }
   }
   
-  // Process img1 points on GPU
-  cudaNaiveInterpolate(img1->data, img1->ncols, img1->nrows, 
-                       coords, results, windowSize);
-  
-  // Process img2 points on GPU
-  cudaNaiveInterpolate(img2->data, img2->ncols, img2->nrows, 
-                       coords + windowSize * 2, results + windowSize, windowSize);
+  // Process img1 and img2 points on GPU
+#ifdef USE_CUDA_INTERPOLATION
+  cudaTextureInterpolate(img1->data, img1->ncols, img1->nrows, 
+                         coords, results, windowSize);
+  cudaTextureInterpolate(img2->data, img2->ncols, img2->nrows, 
+                         coords + windowSize * 2, results + windowSize, windowSize);
+#else
+  // CPU fallback
+  for (int i = 0; i < windowSize; i++) {
+    float x, y;
+    x = coords[i * 2];
+    y = coords[i * 2 + 1];
+    results[i] = _interpolate(x, y, img1);
+    
+    x = coords[(i + windowSize) * 2];
+    y = coords[(i + windowSize) * 2 + 1];
+    results[i + windowSize] = _interpolate(x, y, img2);
+  }
+#endif
   
   // Compute differences
   for (int i = 0; i < windowSize; i++) {
@@ -161,14 +173,41 @@ static void _computeGradientSumCUDA(
   }
   
   // Process all gradient images on GPU
-  cudaNaiveInterpolate(gradx1->data, gradx1->ncols, gradx1->nrows, 
-                       coords, results, windowSize);
-  cudaNaiveInterpolate(gradx2->data, gradx2->ncols, gradx2->nrows, 
-                       coords + windowSize * 2, results + windowSize, windowSize);
-  cudaNaiveInterpolate(grady1->data, grady1->ncols, grady1->nrows, 
-                       coords + windowSize * 4, results + windowSize * 2, windowSize);
-  cudaNaiveInterpolate(grady2->data, grady2->ncols, grady2->nrows, 
-                       coords + windowSize * 6, results + windowSize * 3, windowSize);
+#ifdef USE_CUDA_INTERPOLATION
+  cudaTextureInterpolate(gradx1->data, gradx1->ncols, gradx1->nrows, 
+                         coords, results, windowSize);
+  cudaTextureInterpolate(gradx2->data, gradx2->ncols, gradx2->nrows, 
+                         coords + windowSize * 2, results + windowSize, windowSize);
+  cudaTextureInterpolate(grady1->data, grady1->ncols, grady1->nrows, 
+                         coords + windowSize * 4, results + windowSize * 2, windowSize);
+  cudaTextureInterpolate(grady2->data, grady2->ncols, grady2->nrows, 
+                         coords + windowSize * 6, results + windowSize * 3, windowSize);
+#else
+  // CPU fallback
+  for (int i = 0; i < windowSize; i++) {
+    float x, y;
+    
+    // gradx1
+    x = coords[i * 2];
+    y = coords[i * 2 + 1];
+    results[i] = _interpolate(x, y, gradx1);
+    
+    // gradx2
+    x = coords[(i + windowSize) * 2];
+    y = coords[(i + windowSize) * 2 + 1];
+    results[i + windowSize] = _interpolate(x, y, gradx2);
+    
+    // grady1
+    x = coords[(i + windowSize * 2) * 2];
+    y = coords[(i + windowSize * 2) * 2 + 1];
+    results[i + windowSize * 2] = _interpolate(x, y, grady1);
+    
+    // grady2
+    x = coords[(i + windowSize * 3) * 2];
+    y = coords[(i + windowSize * 3) * 2 + 1];
+    results[i + windowSize * 3] = _interpolate(x, y, grady2);
+  }
+#endif
   
   // Compute sums
   for (int i = 0; i < windowSize; i++) {

@@ -86,6 +86,16 @@ typedef struct  {
   void *pyramid_last;
   void *pyramid_last_gradx;
   void *pyramid_last_grady;
+  
+  /* GPU persistent buffers (allocated once, reused throughout tracking) */
+  void *d_img_data;           /* Device image buffer */
+  void *d_gradx_data;         /* Device gradient X buffer */
+  void *d_grady_data;         /* Device gradient Y buffer */
+  void *d_tmp_buffer;         /* Temporary buffer for convolution */
+  void *d_feature_coords;     /* Feature coordinates buffer */
+  void *d_results;            /* Interpolation/computation results buffer */
+  size_t d_buffer_size;       /* Current allocation size for dynamic resizing */
+  void *d_texObj;             /* Texture object for interpolation (cudaTextureObject_t) */
 }  KLT_TrackingContextRec, *KLT_TrackingContext;
 
 

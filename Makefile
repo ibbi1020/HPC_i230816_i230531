@@ -1,79 +1,92 @@
 ######################################################################
-# Choose your compilers
+# BUILD CONFIGURATION
+# Set USE_CUDA=1 for GPU-accelerated build (requires CUDA toolkit)
+# Set USE_CUDA=0 for CPU-only build (portable, no CUDA required)
+######################################################################
+USE_CUDA ?= 1
+
+######################################################################
+# Compilers
+######################################################################
 CC = gcc
 NVCC = nvcc
-######################################################################
-# CUDA compiler and flags
-# Updated for Google Colab GPUs (Tesla T4: sm_75, V100: sm_70, A100: sm_80)
-# Using sm_75 as default for T4, add multiple architectures for compatibility
-NVCC = nvcc
-CUDA_FLAGS = -O3 -arch=sm_75 -gencode=arch=compute_70,code=sm_70 -gencode=arch=compute_75,code=sm_75 -gencode=arch=compute_80,code=sm_80
-CUDA_LIBS = -lcudart
-CUDA_LIBDIR = -L/usr/local/cuda/lib64
-
-# CUDA Profiling flags
-CUDA_PROFILE_FLAGS = -lineinfo -Xcompiler -rdynamic
 
 ######################################################################
-# -DNDEBUG prevents the assert() statements from being included in 
-# the code.  If you are having problems running the code, you might 
-# want to comment this line to see if an assert() statement fires.
-FLAG1 = -DNDEBUG
+# Compiler flags
 ######################################################################
-# -DKLT_USE_QSORT forces the code to use the standard qsort() 
-# routine.  Otherwise it will use a quicksort routine that takes
-# advantage of our specific data structure to greatly reduce the
-# running time on some machines.  Uncomment this line if for some
-# reason you are unhappy with the special routine.
-# FLAG2 = -DKLT_USE_QSORT
-######################################################################
-# Add your favorite C flags here.
-# Add CUDA include path so convolve.c can find cuda_runtime.h
-CFLAGS = $(FLAG1) $(FLAG2) -I/usr/local/cuda/include
-######################################################################
-# CUDA flags
-# GTX 960 is Maxwell architecture with compute capability 5.2
-NVCCFLAGS = $(FLAG1) $(FLAG2) \
-            -gencode arch=compute_50,code=sm_50 \
-            -gencode arch=compute_50,code=compute_50 \
-            -Xcompiler -fPIC \
-            -rdc=true
-######################################################################
-# Library flags
-LIB = -L/usr/local/lib -L/usr/lib -L. -L/usr/local/cuda/lib64
-LIBS = -lm -lcudart
-######################################################################
-# Source and object files
-EXAMPLES = example1.c example2.c example3.c example4.c example5.c
+FLAG1 = -DNDEBUG  # Remove asserts for performance
+# FLAG2 = -DKLT_USE_QSORT  # Uncomment to use standard qsort()
 
-# C source files (convolve.c stays as .c)
-C_ARCH = convolve.c error.c pnmio.c pyramid.c selectGoodFeatures.c \
-         storeFeatures.c trackFeatures.c klt.c klt_util.c writeFeatures.c
+# Base C flags
+CFLAGS = -O3 $(FLAG1) $(FLAG2)
 
-# CUDA source files (new separate GPU file)
-CUDA_ARCH = convolve_gpu.cu
+# Conditional CUDA configuration
+ifeq ($(USE_CUDA), 1)
+	# GPU build: Enable CUDA optimizations
+	CFLAGS += -DUSE_CUDA_BUILD=1
+	CFLAGS += -I/usr/local/cuda/include
+    
+    # CUDA compiler flags (Tesla T4: sm_75, V100: sm_70, A100: sm_80)
+    CUDA_FLAGS = -O3 -arch=sm_75 \
+                 -gencode=arch=compute_70,code=sm_70 \
+                 -gencode=arch=compute_75,code=sm_75 \
+                 -gencode=arch=compute_80,code=sm_80 \
+                 -lineinfo
+    
+    # CUDA libraries
+    CUDA_LIBS = -lcudart
+    CUDA_LIBDIR = -L/usr/local/cuda/lib64
+    
+    # CUDA source files
+    CUDA_SRCS = interpolate_cuda.cu mineigenvalue_cuda.cu convolve_gpu.cu
+    CUDA_OBJS = $(CUDA_SRCS:.cu=.o)
+else
+	# CPU-only build: No CUDA dependencies
+	CFLAGS += -DUSE_CUDA_BUILD=0
+    CUDA_FLAGS =
+    CUDA_LIBS =
+    CUDA_LIBDIR =
+    CUDA_SRCS =
+    CUDA_OBJS =
+endif
 
+######################################################################
+# Source files
+######################################################################
 EXAMPLES = example1.c example2.c example3.c example4.c example5.c
 ARCH = convolve.c error.c pnmio.c pyramid.c selectGoodFeatures.c \
        storeFeatures.c trackFeatures.c klt.c klt_util.c writeFeatures.c
-CUDA_SRCS = interpolate_cuda.cu mineigenvalue_cuda.cu convolve_gpu.cu
-CUDA_OBJS = $(CUDA_SRCS:.cu=.o)
-LIB = -L/usr/local/lib -L/usr/lib
-
-.SUFFIXES:  .c .o .cu
 
 ######################################################################
-# Targets
+# Library paths
+######################################################################
+LIB = -L/usr/local/lib -L/usr/lib -L.
+
+.SUFFIXES: .c .o .cu
+
+######################################################################
+# Build Targets
+######################################################################
 
 all: lib $(EXAMPLES:.c=)
 
+# C compilation (general rule)
 %.o: %.c
 	$(CC) -c $(CFLAGS) $< -o $@
 
-.cu.o:
-	$(NVCC) -c $(CUDA_FLAGS) $<
+# Explicit dependencies for files that include cuda_config.h
+convolve.o: convolve.c cuda_config.h convolve.h
+	$(CC) -c $(CFLAGS) convolve.c -o convolve.o
 
-# Explicit rules for CUDA object files
+trackFeatures.o: trackFeatures.c cuda_config.h
+	$(CC) -c $(CFLAGS) trackFeatures.c -o trackFeatures.o
+
+selectGoodFeatures.o: selectGoodFeatures.c cuda_config.h
+	$(CC) -c $(CFLAGS) selectGoodFeatures.c -o selectGoodFeatures.o
+
+# CUDA compilation (only if USE_CUDA=1)
+ifeq ($(USE_CUDA), 1)
+
 interpolate_cuda.o: interpolate_cuda.cu interpolate_cuda.h cuda_config.h
 	$(NVCC) -c $(CUDA_FLAGS) interpolate_cuda.cu
 
@@ -82,226 +95,115 @@ mineigenvalue_cuda.o: mineigenvalue_cuda.cu mineigenvalue_cuda.h cuda_config.h
 
 convolve_gpu.o: convolve_gpu.cu convolve_gpu.h cuda_config.h
 	$(NVCC) -c $(CUDA_FLAGS) convolve_gpu.cu
+endif
 
-# Explicit library target so rules depending on 'libklt.a' can build it
+# Library build (includes CUDA objects only if USE_CUDA=1)
 libklt.a: $(ARCH:.c=.o) $(CUDA_OBJS)
 	rm -f libklt.a
 	ar ruv libklt.a $(ARCH:.c=.o) $(CUDA_OBJS)
 
-# Keep 'lib' as an alias for convenience
 lib: libklt.a
 
+# Example programs
 example1: libklt.a
-	$(CC) -O3 $(CFLAGS) -o $@ $@.c -L. -lklt $(LIB) $(CUDA_LIBDIR) $(CUDA_LIBS) -lm
+	$(CC) $(CFLAGS) -o $@ $@.c -L. -lklt $(LIB) $(CUDA_LIBDIR) $(CUDA_LIBS) -lm
 
 example2: libklt.a
-	$(CC) -O3 $(CFLAGS) -o $@ $@.c -L. -lklt $(LIB) $(CUDA_LIBDIR) $(CUDA_LIBS) -lm
+	$(CC) $(CFLAGS) -o $@ $@.c -L. -lklt $(LIB) $(CUDA_LIBDIR) $(CUDA_LIBS) -lm
 
 example3: libklt.a
-	$(CC) -O3 $(CFLAGS) -o $@ $@.c -L. -lklt $(LIB) $(CUDA_LIBDIR) $(CUDA_LIBS) -lm
+	$(CC) $(CFLAGS) -o $@ $@.c -L. -lklt $(LIB) $(CUDA_LIBDIR) $(CUDA_LIBS) -lm
 
 example4: libklt.a
-	$(CC) -O3 $(CFLAGS) -o $@ $@.c -L. -lklt $(LIB) $(CUDA_LIBDIR) $(CUDA_LIBS) -lm
+	$(CC) $(CFLAGS) -o $@ $@.c -L. -lklt $(LIB) $(CUDA_LIBDIR) $(CUDA_LIBS) -lm
 
 example5: libklt.a
-	$(CC) -O3 $(CFLAGS) -o $@ $@.c -L. -lklt $(LIB) $(CUDA_LIBDIR) $(CUDA_LIBS) -lm
+	$(CC) $(CFLAGS) -o $@ $@.c -L. -lklt $(LIB) $(CUDA_LIBDIR) $(CUDA_LIBS) -lm
 
 ######################################################################
-# Utility targets
+# Utility Targets
+######################################################################
+
 depend:
-	makedepend $(C_ARCH) $(EXAMPLES)
+	makedepend $(ARCH) $(EXAMPLES)
 
 clean:
-	rm -f *.o *.a $(EXAMPLES:.c=) *.tar *.tar.gz libklt.a \
-	      feat*.ppm features.ft features.txt gmon.out \
-	      profile-*.txt profile-*.dot profile-*.pdf \
-	      profile-*-gprof.txt profile-*-gprof.pdf profile-*-gprof.dot \
-	      profile-*.ncu-rep profile-*.nsys-rep *.qdrep *.sqlite
+	rm -f *.o *.a $(EXAMPLES:.c=) libklt.a \
+    	feat*.ppm features.ft features.txt gmon.out \
+    	profile-*.txt profile-*.pdf profile-*.ncu-rep profile-*.nsys-rep
 
 ######################################################################
-# Profiling targets with gprof
-# Compiles with profiling flags and generates text + PDF reports
-
-# Build library with gprof profiling flags (CPU only, no CUDA)
-gprof-lib: CFLAGS += -O1 -g -pg -fno-inline -fno-omit-frame-pointer
-gprof-lib: $(ARCH:.c=.o)
-	rm -f libklt.a
-	ar ruv libklt.a $(ARCH:.c=.o)
-
-# Build individual examples with gprof (without auto-running)
-gprof-example1: gprof-lib
-	$(CC) -O1 -g -pg -fno-inline -fno-omit-frame-pointer $(FLAG1) $(FLAG2) -o example1 example1.c -L. -lklt $(LIB) -lm -pg
-
-gprof-example2: gprof-lib
-	$(CC) -O1 -g -pg -fno-inline -fno-omit-frame-pointer $(FLAG1) $(FLAG2) -o example2 example2.c -L. -lklt $(LIB) -lm -pg
-
-gprof-example3: gprof-lib
-	$(CC) -O1 -g -pg -fno-inline -fno-omit-frame-pointer $(FLAG1) $(FLAG2) -o example3 example3.c -L. -lklt $(LIB) -lm -pg
-
-gprof-example4: gprof-lib
-	$(CC) -O1 -g -pg -fno-inline -fno-omit-frame-pointer $(FLAG1) $(FLAG2) -o example4 example4.c -L. -lklt $(LIB) -lm -pg
-
-gprof-example5: gprof-lib
-	$(CC) -O1 -g -pg -fno-inline -fno-omit-frame-pointer $(FLAG1) $(FLAG2) -o example5 example5.c -L. -lklt $(LIB) -lm -pg
-
-# Build all examples with gprof
-gprof-all: gprof-example1 gprof-example2 gprof-example3 gprof-example4 gprof-example5
-	@echo "All examples built with gprof profiling!"
-
+# Profiling Targets (GPU only - requires USE_CUDA=1)
 ######################################################################
-# Profile and generate reports (run program + create text + PDF)
 
-# Profile example3 with gprof (text + PDF output)
-profile-gprof-example3: gprof-example3
-	@echo "Running example3 with gprof profiling..."
-	./example3
-	@echo "Generating gprof text profile..."
-	gprof example3 gmon.out > profile-example3-gprof.txt
-	@echo "Generating gprof PDF call graph..."
-	@if [ -f ./gprof2pdf.sh ]; then \
-		bash ./gprof2pdf.sh profile-example3-gprof.txt; \
-		echo "✓ Generated: profile-example3-gprof.txt"; \
-		echo "✓ Generated: profile-example3-gprof.pdf"; \
-	else \
-		echo "Warning: gprof2pdf.sh not found. Only text profile generated."; \
-		echo "✓ Generated: profile-example3-gprof.txt"; \
-	fi
+ifeq ($(USE_CUDA), 1)
 
-# Profile example1 (text + PDF)
-profile-gprof-example1: gprof-example1
-	@echo "Running example1 with gprof profiling..."
-	./example1
-	gprof example1 gmon.out > profile-example1-gprof.txt
-	@if [ -f ./gprof2pdf.sh ]; then bash ./gprof2pdf.sh profile-example1-gprof.txt; fi
-	@echo "✓ Profile saved to profile-example1-gprof.txt (and .pdf if available)"
-
-# Profile example2 (text + PDF)
-profile-gprof-example2: gprof-example2
-	@echo "Running example2 with gprof profiling..."
-	./example2
-	gprof example2 gmon.out > profile-example2-gprof.txt
-	@if [ -f ./gprof2pdf.sh ]; then bash ./gprof2pdf.sh profile-example2-gprof.txt; fi
-	@echo "✓ Profile saved to profile-example2-gprof.txt (and .pdf if available)"
-
-# Profile example4 (text + PDF)
-profile-gprof-example4: gprof-example4
-	@echo "Running example4 with gprof profiling..."
-	./example4
-	gprof example4 gmon.out > profile-example4-gprof.txt
-	@if [ -f ./gprof2pdf.sh ]; then bash ./gprof2pdf.sh profile-example4-gprof.txt; fi
-	@echo "✓ Profile saved to profile-example4-gprof.txt (and .pdf if available)"
-
-# Profile example5 (text + PDF)
-profile-gprof-example5: gprof-example5
-	@echo "Running example5 with gprof profiling..."
-	./example5
-	gprof example5 gmon.out > profile-example5-gprof.txt
-	@if [ -f ./gprof2pdf.sh ]; then bash ./gprof2pdf.sh profile-example5-gprof.txt; fi
-	@echo "✓ Profile saved to profile-example5-gprof.txt (and .pdf if available)"
-
-# Profile all examples with gprof
-profile-gprof-all: gprof-all
-	@echo "Profiling all examples with gprof..."
-	@for example in example1 example2 example3 example4 example5; do \
-		echo "Profiling $$example..."; \
-		./$$example; \
-		gprof $$example gmon.out > profile-$$example-gprof.txt; \
-		if [ -f ./gprof2pdf.sh ]; then bash ./gprof2pdf.sh profile-$$example-gprof.txt; fi; \
-		echo "✓ $$example profiled"; \
-	done
-	@echo "All profiles generated!"
-
-# Alias for quick access (most common use case)
-profile-example3: profile-gprof-example3
-
-######################################################################
-# CUDA/GPU Profiling targets
-# These profile GPU kernels AND CPU overhead (total execution time)
-# Use these for GPU-accelerated code to see complete performance picture
-
-# Profile with nvprof (GPU kernels + CUDA API + CPU overhead)
-# This shows TOTAL time including CPU→GPU transfers, kernel execution, etc.
-nvprof-example3: example3
-	@echo "=========================================="
-	@echo "Profiling example3 with nvprof..."
-	@echo "This shows GPU kernel time + CUDA API time + memory transfers"
-	@echo "=========================================="
-	nvprof --print-summary --print-api-trace --print-summary --log-file profile-example3-nvprof.txt ./example3 2>&1 || nvprof --print-gpu-trace --log-file profile-example3-nvprof.txt ./example3 2>&1
-	@echo ""
-	@echo "✓ Generated: profile-example3-nvprof.txt"
-	@if [ -f profile-example3-nvprof.txt ]; then \
-		echo "Generating PDF visualization..."; \
-		bash nvprof2pdf.sh profile-example3-nvprof.txt profile-example3-nvprof.pdf && \
-		echo "✓ Generated: profile-example3-nvprof.pdf" || \
-		echo "⚠ PDF generation failed (matplotlib required: pip install matplotlib)"; \
-	fi
-	@echo "View with: cat profile-example3-nvprof.txt"
-
-# Profile with nvprof (simple version, GPU trace only)
-nvprof-simple-example3: example3
-	@echo "Profiling GPU kernels only..."
-	nvprof --print-summary --log-file profile-example3-nvprof-simple.txt ./example3
-	@echo "✓ Generated: profile-example3-nvprof-simple.txt"
-	@if [ -f profile-example3-nvprof-simple.txt ]; then \
-		echo "Generating PDF visualization..."; \
-		bash nvprof2pdf.sh profile-example3-nvprof-simple.txt profile-example3-nvprof-simple.pdf && \
-		echo "✓ Generated: profile-example3-nvprof-simple.pdf" || \
-		echo "⚠ PDF generation failed (matplotlib required: pip install matplotlib)"; \
-	fi
-
-# Profile with Nsight Systems (timeline view of CPU + GPU)
-# This is best for understanding execution flow and finding bottlenecks
+# Nsight Systems: Timeline view (when CPU and GPU are active)
 nsys-example3: example3
-	@echo "=========================================="
-	@echo "Profiling with Nsight Systems (timeline)..."
-	@echo "This shows when CPU and GPU are active over time"
-	@echo "=========================================="
-	nsys profile --stats=true --force-overwrite=true --output=profile-example3-nsys ./example3 > profile-example3-nsys.txt 2>&1 || echo "Warning: nsys not available. Install with: apt-get install nsight-systems-cli"
-	@echo ""
-	@echo "✓ Generated: profile-example3-nsys.nsys-rep (binary, view with nsys-ui)"
+	@echo "Profiling with Nsight Systems (timeline view)..."
+	nsys profile --stats=true --force-overwrite=true --output=profile-example3-nsys ./example3
+	@echo "✓ Generated: profile-example3-nsys.nsys-rep"
 	@echo "✓ Generated: profile-example3-nsys.txt (text summary)"
 
-# Profile with Nsight Compute (detailed kernel metrics)
-# Use this to optimize individual kernel performance
+# Nsight Compute: Detailed kernel metrics (occupancy, memory efficiency)
 ncu-example3: example3
-	@echo "=========================================="
 	@echo "Profiling kernels with Nsight Compute (detailed metrics)..."
-	@echo "This shows kernel occupancy, memory efficiency, etc."
-	@echo "=========================================="
-	ncu --set full --export profile-example3-ncu --force-overwrite ./example3 || echo "Warning: ncu not available. Install with: apt-get install nsight-compute-cli"
-	@echo ""
-	@echo "✓ Generated: profile-example3-ncu.ncu-rep (view with ncu-ui)"
+	ncu --set full --export profile-example3-ncu --force-overwrite ./example3
+	@echo "✓ Generated: profile-example3-ncu.ncu-rep"
 
-# Quick kernel profiling (faster, basic metrics)
+# Nsight Compute: Quick profiling (basic metrics, faster)
 ncu-quick-example3: example3
-	@echo "Quick kernel profiling with Nsight Compute..."
-	ncu --set basic --export profile-example3-ncu-quick --force-overwrite ./example3 || ncu --print-summary stdout ./example3 > profile-example3-ncu-quick.txt 2>&1
+	@echo "Quick kernel profiling..."
+	ncu --set basic --export profile-example3-ncu-quick --force-overwrite ./example3
 	@echo "✓ Generated: profile-example3-ncu-quick.ncu-rep"
 
-# Comprehensive profiling (runs nvprof + nsys if available)
+# Comprehensive profiling (nsys + ncu summary)
 cuda-profile-example3: example3
-	@echo "=========================================="
+	@echo "========================================"
 	@echo "COMPREHENSIVE CUDA PROFILING"
-	@echo "This profiles EVERYTHING: CPU, GPU, memory transfers"
-	@echo "=========================================="
+	@echo "========================================"
+	@nsys profile --stats=true --force-overwrite=true --output=profile-example3-nsys ./example3 > profile-example3-nsys.txt 2>&1
+	@ncu --set basic --export profile-example3-ncu --force-overwrite ./example3 > profile-example3-ncu.txt 2>&1 || true
 	@echo ""
-	@echo "1. Running nvprof (GPU + API trace)..."
-	@nvprof --print-summary --print-api-trace --print-summary --log-file profile-example3-nvprof.txt ./example3 2>&1 || echo "nvprof failed, trying simple mode..." && nvprof --print-gpu-trace --log-file profile-example3-nvprof.txt ./example3 2>&1
-	@echo ""
-	@echo "2. Running nsys (if available)..."
-	@nsys profile --stats=true --force-overwrite=true --output=profile-example3-nsys ./example3 > profile-example3-nsys-summary.txt 2>&1 || echo "nsys not available (optional)"
-	@echo ""
-	@echo "=========================================="
 	@echo "✓ PROFILING COMPLETE!"
-	@echo "=========================================="
-	@echo "Generated files:"
-	@echo "  • profile-example3-nvprof.txt - GPU kernels + API calls + timing"
-	@echo "  • profile-example3-nvprof.pdf - GPU kernel visualization (if matplotlib available)"
-	@echo "  • profile-example3-nsys.nsys-rep - Timeline (if nsys available)"
-	@echo "  • profile-example3-nsys-summary.txt - Text summary (if nsys available)"
+	@echo "  • profile-example3-nsys.nsys-rep - Timeline (view with nsys-ui)"
+	@echo "  • profile-example3-nsys.txt - Text summary"
+	@echo "  • profile-example3-ncu.ncu-rep - Kernel metrics (view with ncu-ui)"
 
-# Profile all examples with CUDA
-cuda-profile-all: cuda-profile-example3
-	@echo "All CUDA profiles generated!"
+else
 
-.PHONY: clean depend all lib gprof gprof-example1 gprof-example2 gprof-example3 gprof-example4 gprof-example5
+# CPU-only build: No CUDA profiling available
+nsys-example3 ncu-example3 ncu-quick-example3 cuda-profile-example3:
+	@echo "Error: CUDA profiling requires USE_CUDA=1"
+	@echo "Rebuild with: make clean && make USE_CUDA=1 example3"
+	@exit 1
+endif
+
+######################################################################
+# Help Target
+######################################################################
+
+help:
+	@echo "KLT Feature Tracker - Build System"
+	@echo ""
+	@echo "BUILD MODES:"
+	@echo "  make [USE_CUDA=1]        Build with GPU acceleration (default)"
+	@echo "  make USE_CUDA=0          Build CPU-only version (portable)"
+	@echo ""
+	@echo "TARGETS:"
+	@echo "  make all                 Build library + all examples"
+	@echo "  make lib                 Build libklt.a only"
+	@echo "  make example3            Build example3 (primary benchmark)"
+	@echo "  make clean               Remove all build artifacts"
+	@echo ""
+	@echo "PROFILING (GPU only):"
+	@echo "  make nsys-example3       Timeline profiling (CPU+GPU activity)"
+	@echo "  make ncu-example3        Detailed kernel metrics"
+	@echo "  make cuda-profile-example3  Comprehensive profiling"
+	@echo ""
+	@echo "USAGE EXAMPLES:"
+	@echo "  make clean && make example3              # GPU build (default)"
+	@echo "  make clean && make USE_CUDA=0 example3   # CPU-only build"
+	@echo "  make cuda-profile-example3               # Profile GPU kernels"
+
+.PHONY: all lib clean depend help nsys-example3 ncu-example3 ncu-quick-example3 cuda-profile-example3
